@@ -12,6 +12,10 @@ const formattedDate = currentDate.toLocaleDateString("en-US", {
 });
 
 const sendEmail = async (email: string, verificationOTP: string) => {
+  console.log("MAIL_HOST:", process.env.MAIL_HOST);
+  console.log("MAIL_USERNAME:", process.env.MAIL_USERNAME);
+  console.log("SMTP_PORT:", process.env.SMTP_PORT);
+
   const transporter = nodemailer.createTransport({
     host: process.env.MAIL_HOST,
     port: Number(process.env.SMTP_PORT) || 465,
@@ -21,6 +25,8 @@ const sendEmail = async (email: string, verificationOTP: string) => {
       pass: process.env.MAIL_PASSWORD,
     },
   });
+
+
   const mailOptions = {
     from: `${process.env.MAIL_USERNAME}`,
     to: email,
