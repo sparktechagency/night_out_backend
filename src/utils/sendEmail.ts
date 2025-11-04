@@ -13,14 +13,16 @@ const formattedDate = currentDate.toLocaleDateString("en-US", {
 
 const sendEmail = async (email: string, verificationOTP: string) => {
   const transporter = nodemailer.createTransport({
-    service: process.env.MAIL_HOST,
+    host: process.env.MAIL_HOST,
+    port: Number(process.env.SMTP_PORT) || 465,
+    secure: Number(process.env.SMTP_PORT) === 465,
     auth: {
       user: process.env.MAIL_USERNAME,
       pass: process.env.MAIL_PASSWORD,
     },
   });
   const mailOptions = {
-    from: `${process.env.SERVICE_NAME}`,
+    from: `${process.env.MAIL_USERNAME}`,
     to: email,
     date: formattedDate,
     subject: "Verification",
