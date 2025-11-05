@@ -19,21 +19,29 @@ const home = async (req: Request, res: Response, next: NextFunction): Promise<Re
   }
 
   const venues = await fetchNearbyVenues(lat, lng, radius);
-  console.log(venues);
-  const resultBars: any[] = [];
 
-  for (const venue of venues) {
-    const existingBar = await Bar.findOne({ placeId: venue.place_id });
+  // Bulk query for bars that already exist
+  const placeIds = venues.map(venue => venue.place_id);
+  const existingBars = await Bar.find({ placeId: { $in: placeIds } });
+
+  // Create a map of placeId to existing bar for fast lookups
+  const existingBarsMap = new Map(existingBars.map(bar => [bar.placeId, bar]));
+
+  const newBarsPromises = venues.map(async (venue) => {
+    const existingBar = existingBarsMap.get(venue.place_id);
+
     if (existingBar) {
-      resultBars.push(existingBar);
+      return existingBar;
     } else {
       const newBarData = await buildBarObject(venue, lat, lng);
-      console.log(newBarData.about.schedule);
       const newBar = new Bar(newBarData);
       await newBar.save();
-      resultBars.push(newBar);
+      return newBar;
     }
-  }
+  });
+
+  // Wait for all the bars to be processed (both existing and new ones)
+  const resultBars = await Promise.all(newBarsPromises);
 
   const sortedBars = resultBars.sort((a, b) => {
     if (b.total_reviewer !== a.total_reviewer) {
@@ -42,32 +50,23 @@ const home = async (req: Request, res: Response, next: NextFunction): Promise<Re
     return b.average_rating - a.average_rating;
   });
 
+  // Date formatting logic
   const now = new Date();
   const weekday = now.toLocaleString('en-US', { weekday: 'short' });
-  const day = now.getDate().toString().padStart(2, '0');
-  const month = now.toLocaleString('en-US', { month: 'short' });
-  const year = now.getFullYear();
-  const formattedDate = `${weekday}, ${day} ${month}, ${year}`;
+  const formattedDate = now.toLocaleString('en-US', {
+    weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
+  });
   const currentDay = weekday;
 
-  sortedBars.forEach(bar => {
+  // Process bars to add current date and close time
+  sortedBars.forEach((bar: any) => {
     bar.currentDate = formattedDate;
-
-    let closeTime = "";
-    if (bar.about.schedule && Array.isArray(bar.about.schedule)) {
-      const todaySchedule = bar.about.schedule.find((item: { day: string; }) => item.day.toLowerCase() === currentDay.toLowerCase());
-      if (todaySchedule && todaySchedule.time) {
-        const parts = todaySchedule.time.split("–");
-        if (parts.length >= 2) {
-          closeTime = parts[1].trim();
-        }
-      }
-    }
-    bar.closeTime = closeTime;
+    const todaySchedule = bar.about.schedule?.find((schedule: { day: string }) => schedule.day.toLowerCase() === currentDay.toLowerCase());
+    bar.closeTime = todaySchedule?.time?.split("–")[1]?.trim() || "";
   });
 
-  const topBars = sortedBars.slice(0, 4);
-  const simplifiedTopBars = topBars.map(bar => ({
+  // Extract the top 4 bars
+  const topBars = sortedBars.slice(0, 4).map((bar: any) => ({
     _id: bar.id,
     cover: bar.cover,
     barType: bar.barType,
@@ -77,42 +76,36 @@ const home = async (req: Request, res: Response, next: NextFunction): Promise<Re
     closeTime: bar.closeTime,
   }));
 
-
+  // Parallel fetch for favorites for remaining bars
   const remainingBars = sortedBars.slice(4);
-  const bars = await Promise.all(
-    remainingBars.map(async (bar) => {
-      const favoriteEntry = await Favorite.findOne({ user: userId, bar: bar.id });
-      return {
-        _id: bar.id,
-        gallery: [bar.cover, ...bar.gallery],
-        barType: bar.barType,
-        name: bar.name,
-        address: bar.about.address.placeName,
-        currentDate: bar.currentDate,
-        time: bar.about.schedule[0]?.time || "",
-        ...(favoriteEntry ? { isFavorite: true } : {isFavorite: false}),
-      };
-    })
-  );
-  // const bars = remainingBars.map(bar => ({
-  //   _id: bar.id,
-  //   gallery: [bar.cover, ...bar.gallery],
-  //   barType: bar.barType,
-  //   name: bar.name,
-  //   address: bar.about.address.placeName,
-  //   currentDate: bar.currentDate,
-  //   time: bar.about.schedule[0]?.time || "",
-  // }))
+  const barsPromises = remainingBars.map(async (bar: any) => {
+    const favoriteEntry = await Favorite.findOne({ user: userId, bar: bar.id });
+    return {
+      _id: bar.id,
+      gallery: [bar.cover, ...bar.gallery],
+      barType: bar.barType,
+      name: bar.name,
+      address: bar.about.address.placeName,
+      currentDate: bar.currentDate,
+      time: bar.about.schedule[0]?.time || "",
+      isFavorite: !!favoriteEntry,
+    };
+  });
 
+  // Wait for all favorite checks to complete
+  const bars = await Promise.all(barsPromises);
+
+  // Paginate bars based on skip and limit
   const paginatedBars = bars.slice(skip, skip + limit);
   const total = bars.length;
   const totalPages = Math.ceil(total / limit);
 
+  // Return the final response
   return res.status(StatusCodes.OK).json({
     success: true,
-    message: "Bar created successfully.",
+    message: "Bars retrieved successfully.",
     data: {
-      top: simplifiedTopBars,
+      top: topBars,
       bars: paginatedBars,
     },
     pagination: {
@@ -123,7 +116,8 @@ const home = async (req: Request, res: Response, next: NextFunction): Promise<Re
     },
   });
 };
+
 const HomeController = {
-  home
+  home,
 };
 export default HomeController;
